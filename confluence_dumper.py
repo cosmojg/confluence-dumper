@@ -1,38 +1,34 @@
-# -*- coding: utf-8 -*-
-
 # confluence-dumper, a Python project to export spaces, pages and attachments
 #
 # Copyright (c) Siemens AG, 2016
+# Copyright (c) Cosmo J. Guerini, 2023
 #
 # Authors:
 #   Thomas Maier <thomas.tm.maier@siemens.com>
+#   Cosmo J. Guerini <cosmo@cosmo.red>
 #
 # This work is licensed under the terms of the MIT license.
 # See the LICENSE.md file in the top-level directory.
 
-"""
-Confluence-dumper is a Python project to export spaces, pages and attachments
-"""
+"""Confluence-dumper is a Python project to export spaces, pages and attachments."""
 
-from __future__ import print_function
-import sys
-import codecs
 
 import os
 import shutil
+import sys
+
+import settings
 from lxml import html
 from lxml.etree import XMLSyntaxError
 
 import utils
-import settings
 
-
-CONFLUENCE_DUMPER_VERSION = '1.0.0'
-TITLE_OUTPUT = 'C O N F L U E N C E   D U M P E R  %s' % CONFLUENCE_DUMPER_VERSION
+CONFLUENCE_DUMPER_VERSION = "1.0.0"
+TITLE_OUTPUT = f"C O N F L U E N C E   D U M P E R  {CONFLUENCE_DUMPER_VERSION}"
 
 
 def error_print(*args, **kwargs):
-    """ Wrapper for the print function which leads to stderr outputs.
+    """Wrapper for the print function which leads to stderr outputs.
 
     :param args: Not necessary.
     :param kwargs: Not necessary.
@@ -41,7 +37,7 @@ def error_print(*args, **kwargs):
 
 
 def derive_downloaded_file_name(download_url):
-    """ Generates the name of a downloaded/exported file.
+    """Generates the name of a downloaded/exported file.
 
         Example: /download/attachments/524291/peak.jpeg?version=1&modificationDate=1459521827579&api=v2
             => <download_folder>/524291_attachments_peak.jpeg
@@ -51,26 +47,33 @@ def derive_downloaded_file_name(download_url):
     :param download_url: Confluence download URL which is used to derive the downloaded file name.
     :returns: Derived file name; if derivation is not possible, None is returned.
     """
-    if '/download/' in download_url:
-        download_url_parts = download_url.split('/')
+    if "/download/" in download_url:
+        download_url_parts = download_url.split("/")
         download_page_id = download_url_parts[3]
         download_file_type = download_url_parts[2]
 
         # Remove GET parameters
-        last_question_mark_index = download_url_parts[4].rfind('?')
+        last_question_mark_index = download_url_parts[4].rfind("?")
         download_original_file_name = download_url_parts[4][:last_question_mark_index]
 
-        return '%s_%s_%s' % (download_page_id, download_file_type, download_original_file_name)
-    elif '/rest/documentConversion/latest/conversion/thumbnail/' in download_url:
-        file_id = download_url.split('/rest/documentConversion/latest/conversion/thumbnail/')[1][0:-2]
-        return 'generated_preview_%s.jpg' % file_id
+        return f"{download_page_id}_{download_file_type}_{download_original_file_name}"
+    elif "/rest/documentConversion/latest/conversion/thumbnail/" in download_url:
+        file_id = download_url.split(
+            "/rest/documentConversion/latest/conversion/thumbnail/",
+        )[1][:-2]
+        return f"generated_preview_{file_id}.jpg"
     else:
         return None
 
 
-def provide_unique_file_name(duplicate_file_names, file_matching, file_title, is_folder=False,
-                             explicit_file_extension=None):
-    """ Provides an unique AND sanitized file name for a given page title. Confluence does not allow the same page title
+def provide_unique_file_name(
+    duplicate_file_names,
+    file_matching,
+    file_title,
+    is_folder=False,
+    explicit_file_extension=None,
+):
+    """Provides an unique AND sanitized file name for a given page title. Confluence does not allow the same page title
     in one particular space but collisions are possible after filesystem sanitization.
 
     :param duplicate_file_names: A dict in the structure {'<sanitized filename>': amount of duplicates}
@@ -84,32 +87,34 @@ def provide_unique_file_name(duplicate_file_names, file_matching, file_title, is
     else:
         file_name = utils.sanitize_for_filename(file_title)
 
-        if is_folder:
+        if not is_folder and not explicit_file_extension and "." in file_name:
+            file_name, file_extension = file_name.rsplit(".", 1)
+        elif not is_folder and not explicit_file_extension or is_folder:
             file_extension = None
-        elif explicit_file_extension:
-            file_extension = explicit_file_extension
-        else:
-            if '.' in file_name:
-                file_name, file_extension = file_name.rsplit('.', 1)
-            else:
-                file_extension = None
 
+        else:
+            file_extension = explicit_file_extension
         if file_name in duplicate_file_names:
             duplicate_file_names[file_name] += 1
-            file_name = '%s_%d' % (file_name, duplicate_file_names[file_name])
+            file_name = "%s_%d" % (file_name, duplicate_file_names[file_name])
         else:
             duplicate_file_names[file_name] = 0
             file_name = file_name
 
         if file_extension:
-            file_name += '.%s' % file_extension
+            file_name += f".{file_extension}"
 
         file_matching[file_title] = file_name
     return file_name
 
 
-def handle_html_references(html_content, page_duplicate_file_names, page_file_matching, depth=0):
-    """ Repairs links in the page contents with local links.
+def handle_html_references(
+    html_content,
+    page_duplicate_file_names,
+    page_file_matching,
+    depth=0,
+):
+    """Repairs links in the page contents with local links.
 
     :param html_content: Confluence HTML content.
     :param page_duplicate_file_names: A dict in the structure {'<sanitized filename>': amount of duplicates}
@@ -122,8 +127,10 @@ def handle_html_references(html_content, page_duplicate_file_names, page_file_ma
     try:
         html_tree = html.fromstring(html_content)
     except XMLSyntaxError:
-        print('%sWARNING: Could not parse HTML content of last page. Original content will be downloaded as it is.'
-              % ('\t'*(depth+1)))
+        print(
+            "%sWARNING: Could not parse HTML content of last page. Original content will be downloaded as it is."
+            % ("\t" * (depth + 1)),
+        )
         return html_content
 
     # Fix links to other Confluence pages
@@ -132,58 +139,67 @@ def handle_html_references(html_content, page_duplicate_file_names, page_file_ma
     # TODO: This code does not work for "Recent space activity" areas in space pages because of a different url format.
     xpath_expr = '//a[contains(@href, "/display/")]'
     for link_element in html_tree.xpath(xpath_expr):
-        if not link_element.get('class'):
-            print("LINK - "+link_element.attrib['href'])
-            try:
-                page_title = link_element.attrib['href'].split('/')[4]
-            except:
-                page_title = link_element.attrib['href'].split('/')[3]
-
-            page_title = page_title.replace('+', ' ')
+        if not link_element.get("class"):
+            print("LINK - " + link_element.attrib["href"])
+            page_title = link_element.attrib["href"].split("/")[-1]
+            page_title = page_title.replace("+", " ")
             decoded_page_title = utils.decode_url(page_title)
-            offline_link = provide_unique_file_name(page_duplicate_file_names, page_file_matching, decoded_page_title,
-                                                    explicit_file_extension='html')
-            link_element.attrib['href'] = utils.encode_url(offline_link)
+            offline_link = provide_unique_file_name(
+                page_duplicate_file_names,
+                page_file_matching,
+                decoded_page_title,
+                explicit_file_extension="html",
+            )
+            link_element.attrib["href"] = utils.encode_url(offline_link)
 
     # Fix links to other Confluence pages when page ids are used
     xpath_expr = '//a[contains(@href, "/pages/viewpage.action?pageId=")]'
     for link_element in html_tree.xpath(xpath_expr):
-        if not link_element.get('class'):
-            page_id = link_element.attrib['href'].split('/pages/viewpage.action?pageId=')[1]
-            offline_link = '%s.html' % utils.sanitize_for_filename(page_id)
-            link_element.attrib['href'] = utils.encode_url(offline_link)
+        if not link_element.get("class"):
+            page_id = link_element.attrib["href"].split(
+                "/pages/viewpage.action?pageId=",
+            )[1]
+            offline_link = f"{utils.sanitize_for_filename(page_id)}.html"
+            link_element.attrib["href"] = utils.encode_url(offline_link)
 
     # Fix attachment links
     xpath_expr = '//a[contains(@class, "confluence-embedded-file")]'
     for link_element in html_tree.xpath(xpath_expr):
-        file_url = link_element.attrib['href']
+        file_url = link_element.attrib["href"]
         file_name = derive_downloaded_file_name(file_url)
-        relative_file_path = '%s/%s' % (settings.DOWNLOAD_SUB_FOLDER, file_name)
-        #link_element.attrib['href'] = utils.encode_url(relative_file_path)
-        link_element.attrib['href'] = relative_file_path
+        relative_file_path = f"{settings.DOWNLOAD_SUB_FOLDER}/{file_name}"
+        link_element.attrib["href"] = relative_file_path
 
     # Fix file paths for img tags
     # TODO: Handle non-<img> tags as well if necessary.
     # TODO: Support files with different versions as well if necessary.
-    possible_image_xpaths = ['//img[contains(@src, "/download/")]',
-                             '//img[contains(@src, "/rest/documentConversion/latest/conversion/thumbnail/")]']
-    xpath_expr = '|'.join(possible_image_xpaths)
+    possible_image_xpaths = [
+        '//img[contains(@src, "/download/")]',
+        '//img[contains(@src, "/rest/documentConversion/latest/conversion/thumbnail/")]',
+    ]
+    xpath_expr = "|".join(possible_image_xpaths)
     for img_element in html_tree.xpath(xpath_expr):
         # Replace file path
-        file_url = img_element.attrib['src']
+        file_url = img_element.attrib["src"]
         file_name = derive_downloaded_file_name(file_url)
-        relative_file_path = '%s/%s' % (settings.DOWNLOAD_SUB_FOLDER, file_name)
-        img_element.attrib['src'] = relative_file_path
+        relative_file_path = f"{settings.DOWNLOAD_SUB_FOLDER}/{file_name}"
+        img_element.attrib["src"] = relative_file_path
 
         # Add alt attribute if it does not exist yet
-        if not 'alt' in img_element.attrib.keys():
-            img_element.attrib['alt'] = relative_file_path
+        if "alt" not in list(img_element.attrib.keys()):
+            img_element.attrib["alt"] = relative_file_path
 
-    return html.tostring(html_tree)
+    return html.tostring(html_tree).decode()
 
 
-def download_file(clean_url, download_folder, downloaded_file_name, depth=0, error_output=True):
-    """ Downloads a specific file.
+def download_file(
+    clean_url,
+    download_folder,
+    downloaded_file_name,
+    depth=0,
+    error_output=True,
+):
+    """Downloads a specific file.
 
     :param clean_url: Decoded URL to the file.
     :param download_folder: Folder to place the downloaded file in.
@@ -192,30 +208,40 @@ def download_file(clean_url, download_folder, downloaded_file_name, depth=0, err
     :param error_output: (optional) Set to False if you do not want to see any error outputs
     :returns: Path to the downloaded file.
     """
-    downloaded_file_path = '%s/%s' % (download_folder, downloaded_file_name)
+    downloaded_file_path = f"{download_folder}/{downloaded_file_name}"
 
     # Download file if it does not exist yet
     if not os.path.exists(downloaded_file_path):
-        absolute_download_url = '%s%s' % (settings.CONFLUENCE_BASE_URL, clean_url)
-        print('%sDOWNLOAD: %s' % ('\t'*(depth+1), downloaded_file_name))
+        absolute_download_url = f"{settings.CONFLUENCE_BASE_URL}{clean_url}"
+        print("{}DOWNLOAD: {}".format("\t" * (depth + 1), downloaded_file_name))
         try:
-            utils.http_download_binary_file(absolute_download_url, downloaded_file_path,
-                                            auth=settings.HTTP_AUTHENTICATION, headers=settings.HTTP_CUSTOM_HEADERS,
-                                            verify_peer_certificate=settings.VERIFY_PEER_CERTIFICATE,
-                                            proxies=settings.HTTP_PROXIES)
+            utils.http_download_binary_file(
+                absolute_download_url,
+                downloaded_file_path,
+                auth=settings.HTTP_AUTHENTICATION,
+                headers=settings.HTTP_CUSTOM_HEADERS,
+                verify_peer_certificate=settings.VERIFY_PEER_CERTIFICATE,
+                proxies=settings.HTTP_PROXIES,
+            )
 
         except utils.ConfluenceException as e:
             if error_output:
-                error_print('%sERROR: %s' % ('\t'*(depth+2), e))
+                error_print("{}ERROR: {}".format("\t" * (depth + 2), e))
             else:
-                print('%sWARNING: %s' % ('\t'*(depth+2), e))
+                print("{}WARNING: {}".format("\t" * (depth + 2), e))
 
     return downloaded_file_path
 
 
-def download_attachment(download_url, download_folder, attachment_id, attachment_duplicate_file_names,
-                        attachment_file_matching, depth=0):
-    """ Repairs links in the page contents with local links.
+def download_attachment(
+    download_url,
+    download_folder,
+    attachment_id,
+    attachment_duplicate_file_names,
+    attachment_file_matching,
+    depth=0,
+):
+    """Repairs links in the page contents with local links.
 
     :param download_url: Confluence download URL.
     :param download_folder: Folder to place downloaded files in.
@@ -228,52 +254,93 @@ def download_attachment(download_url, download_folder, attachment_id, attachment
     """
     clean_url = utils.decode_url(download_url)
     downloaded_file_name = derive_downloaded_file_name(clean_url)
-    downloaded_file_name = provide_unique_file_name(attachment_duplicate_file_names, attachment_file_matching,
-                                                    downloaded_file_name)
-    downloaded_file_path = download_file(download_url, download_folder, downloaded_file_name, depth=depth)
+    downloaded_file_name = provide_unique_file_name(
+        attachment_duplicate_file_names,
+        attachment_file_matching,
+        downloaded_file_name,
+    )
+    downloaded_file_path = download_file(
+        download_url,
+        download_folder,
+        downloaded_file_name,
+        depth=depth,
+    )
 
     # Download the thumbnail as well if the attachment is an image
-    clean_thumbnail_url = clean_url.replace('/attachments/', '/thumbnails/', 1)
+    clean_thumbnail_url = clean_url.replace("/attachments/", "/thumbnails/", 1)
     downloaded_thumbnail_file_name = derive_downloaded_file_name(clean_thumbnail_url)
-    downloaded_thumbnail_file_name = provide_unique_file_name(attachment_duplicate_file_names, attachment_file_matching,
-                                                              downloaded_thumbnail_file_name)
-    if utils.is_file_format(downloaded_thumbnail_file_name, settings.CONFLUENCE_THUMBNAIL_FORMATS):
+    downloaded_thumbnail_file_name = provide_unique_file_name(
+        attachment_duplicate_file_names,
+        attachment_file_matching,
+        downloaded_thumbnail_file_name,
+    )
+    if utils.is_file_format(
+        downloaded_thumbnail_file_name,
+        settings.CONFLUENCE_THUMBNAIL_FORMATS,
+    ):
         # TODO: Confluence creates thumbnails always as PNGs but does not change the file extension to .png.
-        download_file(clean_thumbnail_url, download_folder, downloaded_thumbnail_file_name, depth=depth,
-                      error_output=False)
+        download_file(
+            clean_thumbnail_url,
+            download_folder,
+            downloaded_thumbnail_file_name,
+            depth=depth,
+            error_output=False,
+        )
 
     # Download the image preview as well if Confluence generated one for the attachment
-    if utils.is_file_format(downloaded_file_name, settings.CONFLUENCE_GENERATED_PREVIEW_FORMATS):
-        clean_preview_url = '/rest/documentConversion/latest/conversion/thumbnail/%s/1' % attachment_id
+    if utils.is_file_format(
+        downloaded_file_name,
+        settings.CONFLUENCE_GENERATED_PREVIEW_FORMATS,
+    ):
+        clean_preview_url = (
+            f"/rest/documentConversion/latest/conversion/thumbnail/{attachment_id}/1"
+        )
         downloaded_preview_file_name = derive_downloaded_file_name(clean_preview_url)
-        downloaded_preview_file_name = provide_unique_file_name(attachment_duplicate_file_names,
-                                                                attachment_file_matching, downloaded_preview_file_name)
-        download_file(clean_preview_url, download_folder, downloaded_preview_file_name, depth=depth, error_output=False)
+        downloaded_preview_file_name = provide_unique_file_name(
+            attachment_duplicate_file_names,
+            attachment_file_matching,
+            downloaded_preview_file_name,
+        )
+        download_file(
+            clean_preview_url,
+            download_folder,
+            downloaded_preview_file_name,
+            depth=depth,
+            error_output=False,
+        )
 
-    return {'file_name': downloaded_file_name, 'file_path': downloaded_file_path}
+    return {"file_name": downloaded_file_name, "file_path": downloaded_file_path}
 
 
 def create_html_attachment_index(attachments):
-    """ Creates a HTML list for a list of attachments.
+    """Creates a HTML list for a list of attachments.
 
     :param attachments: List of attachments.
     :returns: Attachment list as HTML.
     """
-    html_content = '\n\n<h2>Attachments</h2>'
+    html_content = "\n\n<h2>Attachments</h2>"
     if len(attachments) > 0:
-        html_content += '<ul>\n'
+        html_content += "<ul>\n"
         for attachment in attachments:
-            relative_file_path = '/'.join(attachment['file_path'].split('/')[2:])
+            relative_file_path = "/".join(attachment["file_path"].split("/")[2:])
             relative_file_path = utils.encode_url(relative_file_path)
-            html_content += '\t<li><a href="%s">%s</a></li>\n' % (relative_file_path, attachment['file_name'])
-        html_content += '</ul>\n'
+            html_content += f'\t<li><a href="{relative_file_path}">{attachment["file_name"]}</a></li>\n'
+        html_content += "</ul>\n"
     return html_content
 
 
-def fetch_page_recursively(page_id, folder_path, download_folder, html_template, depth=0,
-                           page_duplicate_file_names=None, page_file_matching=None,
-                           attachment_duplicate_file_names=None, attachment_file_matching=None):
-    """ Fetches a Confluence page and its child pages (with referenced downloads).
+def fetch_page_recursively(
+    page_id,
+    folder_path,
+    download_folder,
+    html_template,
+    depth=0,
+    page_duplicate_file_names=None,
+    page_file_matching=None,
+    attachment_duplicate_file_names=None,
+    attachment_file_matching=None,
+):
+    """Fetches a Confluence page and its child pages (with referenced downloads).
 
     :param page_id: Confluence page id.
     :param folder_path: Folder to place downloaded pages in.
@@ -296,134 +363,181 @@ def fetch_page_recursively(page_id, folder_path, download_folder, html_template,
     if not attachment_file_matching:
         attachment_file_matching = {}
 
-    page_url = '%s/rest/api/content/%s?expand=children.page,children.attachment,body.view.value' \
-               % (settings.CONFLUENCE_BASE_URL, page_id)
+    page_url = f"{settings.CONFLUENCE_BASE_URL}/rest/api/content/{page_id}?expand=children.page,children.attachment,body.view.value"
     try:
-        response = utils.http_get(page_url, auth=settings.HTTP_AUTHENTICATION, headers=settings.HTTP_CUSTOM_HEADERS,
-                                  verify_peer_certificate=settings.VERIFY_PEER_CERTIFICATE,
-                                  proxies=settings.HTTP_PROXIES)
-        page_content = response['body']['view']['value']
+        response = utils.http_get(
+            page_url,
+            auth=settings.HTTP_AUTHENTICATION,
+            headers=settings.HTTP_CUSTOM_HEADERS,
+            verify_peer_certificate=settings.VERIFY_PEER_CERTIFICATE,
+            proxies=settings.HTTP_PROXIES,
+        )
+        page_content = response["body"]["view"]["value"]
 
-        page_title = response['title']
-        print('%sPAGE: %s (%s)' % ('\t'*(depth+1), page_title, page_id))
+        page_title = response["title"]
+        print("{}PAGE: {} ({})".format("\t" * (depth + 1), page_title, page_id))
 
         # Construct unique file name
-        file_name = provide_unique_file_name(page_duplicate_file_names, page_file_matching, page_title,
-                                             explicit_file_extension='html')
+        file_name = provide_unique_file_name(
+            page_duplicate_file_names,
+            page_file_matching,
+            page_title,
+            explicit_file_extension="html",
+        )
 
         # Remember this file and all children
-        path_collection = {'file_path': file_name, 'page_title': page_title, 'child_pages': [], 'child_attachments': []}
+        path_collection = {
+            "file_path": file_name,
+            "page_title": page_title,
+            "child_pages": [],
+            "child_attachments": [],
+        }
 
         # Download attachments of this page
         # TODO: Outsource/Abstract the following two while loops because of much duplicate code.
-        page_url = '%s/rest/api/content/%s/child/attachment?limit=25' % (settings.CONFLUENCE_BASE_URL, page_id)
+        page_url = f"{settings.CONFLUENCE_BASE_URL}/rest/api/content/{page_id}/child/attachment?limit=25"
         counter = 0
         while page_url:
-            response = utils.http_get(page_url, auth=settings.HTTP_AUTHENTICATION, headers=settings.HTTP_CUSTOM_HEADERS,
-                                      verify_peer_certificate=settings.VERIFY_PEER_CERTIFICATE,
-                                      proxies=settings.HTTP_PROXIES)
-            counter += len(response['results'])
-            for attachment in response['results']:
-                download_url = attachment['_links']['download']
-                attachment_id = attachment['id'][3:]
-                attachment_info = download_attachment(download_url, download_folder, attachment_id,
-                                                      attachment_duplicate_file_names, attachment_file_matching,
-                                                      depth=depth+1)
-                path_collection['child_attachments'].append(attachment_info)
+            response = utils.http_get(
+                page_url,
+                auth=settings.HTTP_AUTHENTICATION,
+                headers=settings.HTTP_CUSTOM_HEADERS,
+                verify_peer_certificate=settings.VERIFY_PEER_CERTIFICATE,
+                proxies=settings.HTTP_PROXIES,
+            )
+            counter += len(response["results"])
+            for attachment in response["results"]:
+                download_url = attachment["_links"]["download"]
+                attachment_id = attachment["id"][3:]
+                attachment_info = download_attachment(
+                    download_url,
+                    download_folder,
+                    attachment_id,
+                    attachment_duplicate_file_names,
+                    attachment_file_matching,
+                    depth=depth + 1,
+                )
+                path_collection["child_attachments"].append(attachment_info)
 
-            if 'next' in response['_links'].keys():
-                page_url = response['_links']['next']
-                page_url = '%s%s' % (settings.CONFLUENCE_BASE_URL, page_url)
+            if "next" in response["_links"]:
+                page_url = response["_links"]["next"]
+                page_url = f"{settings.CONFLUENCE_BASE_URL}{page_url}"
             else:
                 page_url = None
 
         # Export HTML file
-        page_content = handle_html_references(page_content, page_duplicate_file_names, page_file_matching,
-                                              depth=depth+1)
-        file_path = '%s/%s' % (folder_path, file_name)
-        page_content += create_html_attachment_index(path_collection['child_attachments'])
+        page_content = handle_html_references(
+            page_content,
+            page_duplicate_file_names,
+            page_file_matching,
+            depth=depth + 1,
+        )
+        file_path = f"{folder_path}/{file_name}"
+        page_content += create_html_attachment_index(
+            path_collection["child_attachments"],
+        )
         utils.write_html_2_file(file_path, page_title, page_content, html_template)
 
         # Save another file with page id which forwards to the original one
-        id_file_path = '%s/%s.html' % (folder_path, page_id)
-        id_file_page_title = 'Forward to page %s' % page_title
+        id_file_path = f"{folder_path}/{page_id}.html"
+        id_file_page_title = f"Forward to page {page_title}"
         original_file_link = utils.encode_url(utils.sanitize_for_filename(file_name))
-        id_file_page_content = settings.HTML_FORWARD_MESSAGE % (original_file_link, page_title)
-        id_file_forward_header = '<meta http-equiv="refresh" content="0; url=%s" />' % original_file_link
-        utils.write_html_2_file(id_file_path, id_file_page_title, id_file_page_content, html_template,
-                                additional_headers=[id_file_forward_header])
+        id_file_page_content = settings.HTML_FORWARD_MESSAGE % (
+            original_file_link,
+            page_title,
+        )
+        id_file_forward_header = (
+            f'<meta http-equiv="refresh" content="0; url={original_file_link}" />'
+        )
+        utils.write_html_2_file(
+            id_file_path,
+            id_file_page_title,
+            id_file_page_content,
+            html_template,
+            additional_headers=[id_file_forward_header],
+        )
 
         # Iterate through all child pages
-        page_url = '%s/rest/api/content/%s/child/page?limit=25' % (settings.CONFLUENCE_BASE_URL, page_id)
+        page_url = f"{settings.CONFLUENCE_BASE_URL}/rest/api/content/{page_id}/child/page?limit=25"
         counter = 0
         while page_url:
-            response = utils.http_get(page_url, auth=settings.HTTP_AUTHENTICATION, headers=settings.HTTP_CUSTOM_HEADERS,
-                                      verify_peer_certificate=settings.VERIFY_PEER_CERTIFICATE,
-                                      proxies=settings.HTTP_PROXIES)
-            counter += len(response['results'])
-            for child_page in response['results']:
-                paths = fetch_page_recursively(child_page['id'], folder_path, download_folder, html_template,
-                                               depth=depth+1, page_duplicate_file_names=page_duplicate_file_names,
-                                               page_file_matching=page_file_matching)
-                if paths:
-                    path_collection['child_pages'].append(paths)
+            response = utils.http_get(
+                page_url,
+                auth=settings.HTTP_AUTHENTICATION,
+                headers=settings.HTTP_CUSTOM_HEADERS,
+                verify_peer_certificate=settings.VERIFY_PEER_CERTIFICATE,
+                proxies=settings.HTTP_PROXIES,
+            )
+            counter += len(response["results"])
+            for child_page in response["results"]:
+                if paths := fetch_page_recursively(
+                    child_page["id"],
+                    folder_path,
+                    download_folder,
+                    html_template,
+                    depth=depth + 1,
+                    page_duplicate_file_names=page_duplicate_file_names,
+                    page_file_matching=page_file_matching,
+                ):
+                    path_collection["child_pages"].append(paths)
 
-            if 'next' in response['_links'].keys():
-                page_url = response['_links']['next']
-                page_url = '%s%s' % (settings.CONFLUENCE_BASE_URL, page_url)
+            if "next" in response["_links"]:
+                page_url = response["_links"]["next"]
+                page_url = f"{settings.CONFLUENCE_BASE_URL}{page_url}"
             else:
                 page_url = None
         return path_collection
 
     except utils.ConfluenceException as e:
-        error_print('%sERROR: %s' % ('\t'*(depth+1), e))
+        error_print("{}ERROR: {}".format("\t" * (depth + 1), e))
         return None
 
 
 def create_html_index(index_content):
-    """ Creates an HTML index (mainly to navigate through the exported pages).
+    """Creates an HTML index (mainly to navigate through the exported pages).
 
     :param index_content: Dictionary which contains file paths, page titles and their children recursively.
     :returns: Content index as HTML.
     """
-    file_path = utils.encode_url(index_content['file_path'])
-    page_title = index_content['page_title']
-    page_children = index_content['child_pages']
+    file_path = utils.encode_url(index_content["file_path"])
+    page_title = index_content["page_title"]
+    page_children = index_content["child_pages"]
 
-    html_content = '<a href="%s">%s</a>' % (utils.sanitize_for_filename(file_path), page_title)
+    html_content = (
+        f'<a href="{utils.sanitize_for_filename(file_path)}">{page_title}</a>'
+    )
 
     if len(page_children) > 0:
-        html_content += '<ul>\n'
+        html_content += "<ul>\n"
         for child in page_children:
-            html_content += '\t<li>%s</li>\n' % create_html_index(child)
-        html_content += '</ul>\n'
+            html_content += "\t<li>%s</li>\n" % create_html_index(child)
+        html_content += "</ul>\n"
 
     return html_content
 
 
 def print_welcome_output():
-    """ Displays software title and some license information """
-    print('\n\t %s' % TITLE_OUTPUT)
-    print('\t %s\n' % ('='*len(TITLE_OUTPUT)))
-    print('... a Python project to export spaces, pages and attachments\n')
-    print('Copyright (c) Siemens AG, 2016\n')
-    print('Authors:')
-    print('  Thomas Maier <thomas.tm.maier@siemens.com>\n')
-    print('This work is licensed under the terms of the MIT license.')
-    print('See the LICENSE.md file in the top-level directory.\n\n')
+    """Displays software title and some license information."""
+    print("\n\t %s" % TITLE_OUTPUT)
+    print("\t %s\n" % ("=" * len(TITLE_OUTPUT)))
+    print("... a Python project to export spaces, pages and attachments\n")
+    print("Copyright (c) Siemens AG, 2016\n")
+    print("Copyright (c) Cosmo J. Guerini, 2023\n")
+    print("Authors:")
+    print("  Thomas Maier <thomas.tm.maier@siemens.com>\n")
+    print("  Cosmo J. Guerini <cosmo@cosmo.red>\n")
+    print("This work is licensed under the terms of the MIT license.")
+    print("See the LICENSE.md file in the top-level directory.\n\n")
 
 
 def print_finished_output():
-    """ Displays exit message (for successful export) """
-    print('\n\nFinished!\n')
+    """Displays exit message (for successful export)."""
+    print("\n\nFinished!\n")
 
 
 def main():
-    """ Main function to start the confluence-dumper. """
-
+    """Main function to start the confluence-dumper."""
     # Configure console for unicode output via stdout/stderr
-    #sys.stdout = codecs.getwriter('utf-8')(sys.stdout)
-    #sys.stderr = codecs.getwriter('utf-8')(sys.stderr)
 
     # Welcome output
     print_welcome_output()
@@ -441,64 +555,84 @@ def main():
         spaces_to_export = settings.SPACES_TO_EXPORT
     else:
         spaces_to_export = []
-        page_url = '%s/rest/api/space?limit=25' % settings.CONFLUENCE_BASE_URL
+        page_url = f"{settings.CONFLUENCE_BASE_URL}/rest/api/space?limit=25"
         while page_url:
-            response = utils.http_get(page_url, auth=settings.HTTP_AUTHENTICATION, headers=settings.HTTP_CUSTOM_HEADERS,
-                                      verify_peer_certificate=settings.VERIFY_PEER_CERTIFICATE,
-                                      proxies=settings.HTTP_PROXIES)
-            for space in response['results']:
-                spaces_to_export.append(space['key'])
-
-            if 'next' in response['_links'].keys():
-                page_url = response['_links']['next']
-                page_url = '%s%s' % (settings.CONFLUENCE_BASE_URL, page_url)
+            response = utils.http_get(
+                page_url,
+                auth=settings.HTTP_AUTHENTICATION,
+                headers=settings.HTTP_CUSTOM_HEADERS,
+                verify_peer_certificate=settings.VERIFY_PEER_CERTIFICATE,
+                proxies=settings.HTTP_PROXIES,
+            )
+            spaces_to_export.extend(space["key"] for space in response["results"])
+            if "next" in response["_links"]:
+                page_url = response["_links"]["next"]
+                page_url = f"{settings.CONFLUENCE_BASE_URL}{page_url}"
             else:
                 page_url = None
 
-    print('Exporting %d space(s): %s\n' % (len(spaces_to_export), ', '.join(spaces_to_export)))
+    print(
+        "Exporting %d space(s): %s\n"
+        % (len(spaces_to_export), ", ".join(spaces_to_export)),
+    )
 
-    # Export spaces
-    space_counter = 0
     duplicate_space_names = {}
     space_matching = {}
-    for space in spaces_to_export:
-        space_counter += 1
-
+    for space_counter, space in enumerate(spaces_to_export, start=1):
         # Create folders for this space
-        space_folder_name = provide_unique_file_name(duplicate_space_names, space_matching, space, is_folder=True)
-        space_folder = '%s/%s' % (settings.EXPORT_FOLDER, space_folder_name)
+        space_folder_name = provide_unique_file_name(
+            duplicate_space_names,
+            space_matching,
+            space,
+            is_folder=True,
+        )
+        space_folder = f"{settings.EXPORT_FOLDER}/{space_folder_name}"
         try:
             os.makedirs(space_folder)
-            download_folder = '%s/%s' % (space_folder, settings.DOWNLOAD_SUB_FOLDER)
+            download_folder = f"{space_folder}/{settings.DOWNLOAD_SUB_FOLDER}"
             os.makedirs(download_folder)
 
-            space_url = '%s/rest/api/space/%s?expand=homepage' % (settings.CONFLUENCE_BASE_URL, space)
-            response = utils.http_get(space_url, auth=settings.HTTP_AUTHENTICATION,
-                                      headers=settings.HTTP_CUSTOM_HEADERS,
-                                      verify_peer_certificate=settings.VERIFY_PEER_CERTIFICATE,
-                                      proxies=settings.HTTP_PROXIES)
-            space_name = response['name']
+            space_url = (
+                f"{settings.CONFLUENCE_BASE_URL}/rest/api/space/{space}?expand=homepage"
+            )
+            response = utils.http_get(
+                space_url,
+                auth=settings.HTTP_AUTHENTICATION,
+                headers=settings.HTTP_CUSTOM_HEADERS,
+                verify_peer_certificate=settings.VERIFY_PEER_CERTIFICATE,
+                proxies=settings.HTTP_PROXIES,
+            )
+            space_name = response["name"]
 
-            print('SPACE (%d/%d): %s (%s)' % (space_counter, len(spaces_to_export), space_name, space))
+            print(
+                "SPACE (%d/%d): %s (%s)"
+                % (space_counter, len(spaces_to_export), space_name, space),
+            )
 
-            if "homepage" in response.keys():
-                space_page_id = response['homepage']['id']
-            else:
-                space_page_id = -1
+            space_page_id = response["homepage"]["id"] if "homepage" in response else -1
 
-            path_collection = fetch_page_recursively(space_page_id, space_folder, download_folder, html_template)
-
-            if path_collection:
+            if path_collection := fetch_page_recursively(
+                space_page_id,
+                space_folder,
+                download_folder,
+                html_template,
+            ):
                 # Create index file for this space
-                space_index_path = '%s/index.html' % space_folder
-                space_index_title = 'Index of Space %s (%s)' % (space_name, space)
+                space_index_path = f"{space_folder}/index.html"
+                space_index_title = f"Index of Space {space_name} ({space})"
                 space_index_content = create_html_index(path_collection)
-                utils.write_html_2_file(space_index_path, space_index_title, space_index_content, html_template)
+                utils.write_html_2_file(
+                    space_index_path,
+                    space_index_title,
+                    space_index_content,
+                    html_template,
+                )
         except utils.ConfluenceException as e:
-            error_print('ERROR: %s' % e)
+            error_print(f"ERROR: {e}")
         except OSError:
-            print('WARNING: The space %s has been exported already. Maybe you mentioned it twice in the settings'
-                  % space)
+            print(
+                f"WARNING: The space {space} has been exported already. Maybe you mentioned it twice in the settings",
+            )
 
     # Finished output
     print_finished_output()
@@ -508,5 +642,5 @@ if __name__ == "__main__":
     try:
         main()
     except KeyboardInterrupt:
-        error_print('ERROR: Keyboard Interrupt.')
+        error_print("ERROR: Keyboard Interrupt.")
         sys.exit(1)
